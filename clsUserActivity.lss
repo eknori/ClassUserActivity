@@ -1,0 +1,1492 @@
+Option Declare
+%Include "lsconst.lss"
+
+%REM
+CLASSUserActivity - updated by Alex Elliott of AGECOM (http://www.agecom.com.au)
+CLASSUserActivity - updated by Ulrich Krause of midpoints GmbH (http:/midpoints.de)
+
+This class is an update of the original CLASSUserActivity code available for download from the Lotus Sandbox:
+http://www.lotus.com/ldd/sandbox.nsf/0/c12a2fd2142758b68525688d00708397?OpenDocument
+
+As of September 2010 access to the Sandbox is no longer available.  A copy of the Sandbox and original Class can be found at the following page:
+http://sandboxlive.com/ldd/sandbox.nsf/ByCategory/c12a2fd2142758b68525688d00708397?OpenDocument
+
+Application Updates
+===================
+September 2019, Ulrich Krause a.k.a eknori
+- Linux port (Runs on V11 Beta1, but crashes on 10.0.x 
+
+#0  0x00007fdb2f781f73 in select () from /lib64/libc.so.6
+#1  0x00007fdb30980c75 in FRDoSleep (secs=secs@entry=1, usecs=usecs@entry=0)
+    at cleanup.c:940
+#2  0x00007fdb30985fba in OSRunExternalScript (
+    passed_script=passed_script@entry=0x7fdae177fb30 "\"/opt/ibm/domino/notes/latest/linux/nsd.sh\" -batch -crashpid 4214 -crashtid 3782752000", 
+    flags=flags@entry=1) at cleanup.c:3893
+#3  0x00007fdb3098804c in OSFaultCleanupExt (action2take=action2take@entry=0, 
+    CleanupScriptExecFlag=CleanupScriptExecFlag@entry=4096, 
+    iniFileName=iniFileName@entry=0x0, szProcess=szProcess@entry=0x0, 
+    Length=Length@entry=0, CrashedPID=CrashedPID@entry=0x0) at cleanup.c:1490
+#4  0x00007fdb309880f6 in OSFaultCleanup (action2take=action2take@entry=0, 
+    CleanupScriptExecFlag=CleanupScriptExecFlag@entry=4096, 
+    iniFileName=iniFileName@entry=0x0) at cleanup.c:1276
+#5  0x00007fdb30958183 in fatal_error (signl=11, info=<optimized out>, 
+    context=<optimized out>) at break.c:2169
+#6  <signal handler called>
+#7  0x00007fdb2f7e2ef0 in __memcpy_ssse3_back () from /lib64/libc.so.6
+
+June 2012
+=========
+* Fix memory leak in call to CopyMemoryString in GetNthUserActivityEntry function. (Special
+thank you to 'Jasper Duizendstra' for pointing this out as well as providing the
+solution for resolving the leak).
+* Added 'CreateDbUserActivityDoc' function for creating / update the usage summary document
+for a database.
+* Added 'CreateActivityLogDocs' function for creating individual user activity log entries.
+
+March 2010
+==========
+* Fixes to API function declarations to ensure the correct datatypes are supplied for function arguments (to match expected
+compatible Lotus C-API data types).
+- retUserCount in W32_NSFDbGetUserActivity is now correctly defined as an Integer
+- handle in W32_OSLockObject is now defined as a Long.
+- handle in W32_OSUnlockObject is now defined as a Long
+- Return value for call to W32_OSMemFree is now retrieved.
+- handle in W32_OSMemFree is now defined as a Long.
+- hpvSource in CopyMemory is now defined as an Any.
+- hpvSource in CopyMemoryString is now defined as an Any.
+- Return value for call to W32_ConvertTIMEDATEToText is now retrieved.
+* Reads object in NotesUserActivityEntry class is now defined as an Integer.
+* Writes object in NotesUserActivityEntry class is now defined as an Integer.
+* retUserCount object in NotesUserActivity class is now defined as an Integer.
+* flgHasActivity object in NotesUserActivity class is now defined as a Boolean.
+* If an error occurs in the GetNthUserActivityEntry function after the memory occupied by 'Me.rethUserInfo' is locked it is now
+unlocked when the error handler catches the error.
+* Call to 'PrevDayWrites' now correctly returns the Writes.
+* Error Handling now implemented throughout the code.
+
+This updated script library may be used and modified by anyone provided the above information remains with the code.
+
+%END REM
+
+' Global variables
+Dim Session As NotesSession
+Dim CurrDb As NotesDatabase
+Dim ActivityLogsView As NotesView
+Dim ActivitySummaryView As NotesView
+Dim ErrorDescription As String
+Dim IsWindowsPlatform As Boolean
+
+' Constants
+Const CASE_INSENSITIVE = 5
+Const MAXALPHATIMEDATE = 80
+Const MAXPATH = 256
+Const MAXUSERNAME = 256
+Const LEN_BYTE = 1
+Const LEN_WORD = 2
+Const LEN_DWORD = 4
+Const LOCAL_SERVER = "- Local -"
+
+' The API functions return errors as non-zero values hence zero is success
+Const STATUS_SUCCESS = 0
+
+' When working with the API, handles (always Long) are NULL or empty when they are equal to zero
+Const NULLHANDLE = 0
+
+' *************************************************
+' Library Files
+' *************************************************
+Const LIB_W32 = "nnotes.dll"
+Const LIB_ALPHA = "anotes.dll"
+Const LIB_MAC = "NotesLib"
+Const LIB_TUX = "libnotes.so"
+Const LIB_OS400 = "/qsys.lib/qnotes.lib/libdomw.srvpgm"
+Const LIB_OS2 = "lnotes.dll"
+Const LIB_AIX = "libnotes_r.a"
+
+' *************************************************
+' Platforms
+' *************************************************
+Const PLATFORM_MAC = "Macintosh"
+Const PLATFORM_W32 = "Windows/32"
+Const PLATFORM_W64 = "Windows/64"
+Const PLATFORM_OS400 = "OS/400"
+Const PLATFORM_UNIX = "UNIX"
+Const PLATFORM_LINUX = "Linux"
+
+' API Errors
+Const ERR_NOEXIST = 259
+Const ERR_NO_MODIFIED_NOTES = 572
+Const ERR_SPECIAL_ID = 578
+Const ERR_NOACCESS = 582
+Const ERR_NOT_FOUND = 1028
+Const ERR_ITEM_NOT_FOUND = 546
+Const ERR_MASK = &H3fff
+
+Type TIMEDATE
+	Innards(1) As Long
+End Type
+
+Type TIMEDATE_W32
+	Innard1 As Long
+	Innard2 As Long
+End Type
+
+Type DBACTIVITY
+	First As TIMEDATE
+	Last As TIMEDATE
+	Uses As Long
+	Reads As Long
+	Writes As Long
+	PrevDayUses As Long
+	PrevDayReads As Long
+	PrevDayWrites As Long
+	PrevWeekUses As Long
+	PrevWeekReads As Long
+	PrevWeekWrites As Long
+	PrevMonthUses As Long
+	PrevMonthReads As Long
+	PrevMonthWrites As Long
+End Type
+
+Type DBACTIVITY_ENTRY
+	Time As TIMEDATE
+	Reads As Integer
+	Writes As Integer
+	UserNameOffset As Long
+End Type
+
+Type DBACTIVITYEXTENDED
+	First As TIMEDATE
+	Last As TIMEDATE
+	Uses As Long
+	Reads As Long
+	Writes As Long
+	Adds As Long
+	Updates As Long
+	Deletes As Long
+	PrevDayUses As Long
+	PrevDayReads As Long
+	PrevDayAdds As Long
+	PrevDayUpdates As Long
+	PrevDayDeletes As Long
+	PrevWeekUses As Long
+	PrevWeekReads As Long
+	PrevWeekAdds As Long
+	PrevWeekUpdates As Long
+	PrevWeekDeletes As Long
+	PrevMonthUses As Long
+	PrevMonthReads As Long
+	PrevMonthAdds As Long
+	PrevMonthUpdates As Long
+	PrevMonthDeletes As Long
+End Type
+
+Type DBACTIVITY_ENTRY_EXTENDED
+	Time As TIMEDATE
+	Reads As Integer
+	Adds As Integer
+	Updates As Integer
+	Deletes As Integer
+	NonDataReads As Integer
+	NonDataAdds As Integer
+	NonDataUpdates As Integer
+	NonDataDeletes As Integer
+	UserNameOffset As Long
+End Type
+
+Declare Function NEMMessageBox Lib "nnotesws" ( wHandle As Integer, ByVal szMessage As String, ByVal szTitle As String, ByVal wType As Integer) As Integer
+Declare Function NEMPostStatus Lib "nnotesws" (ByVal szText As String) As Long
+
+Declare Sub W32_CopyMemory Lib "KERNEL32" Alias "RtlMoveMemory" ( hpvDest As Any, ByVal hpvSource As Long, ByVal cbCopy As Long)
+Declare Sub W32_CopyMemoryString Lib "KERNEL32" Alias "RtlMoveMemory" ( ByVal hpvDest As LMBCS String, ByVal hpvSource As Long, ByVal cbCopy As Long)
+Declare Function WIN_NSFDbOpen Lib LIB_W32 Alias "NSFDbOpen" ( ByVal dbName As LMBCS String, hDb As Long) As Integer
+Declare Function WIN_NSFDbClose Lib LIB_W32 Alias "NSFDbClose" ( ByVal hDb As Long) As Integer
+Declare Function WIN_NSFDbGetUserActivity Lib LIB_W32 Alias "NSFDbGetUserActivity" ( ByVal hDB As Long, ByVal flags As Long, retDbActivity As DBActivity, rethUserInfo As Long, retUserCount As integer) As Integer
+Declare Function WIN_NSFDbGetUserActivityExtended Lib LIB_W32 Alias "NSFDbGetUserActivityExtended" ( ByVal hDB As Long, ByVal flags As Long, retDbActivity As DBActivityExtended, rethUserInfo As Long, retUserCount As integer) As Integer
+Declare Function WIN_NSFDbMajorMinorVersionGet Lib LIB_W32 Alias "NSFDbMajorMinorVersionGet"(ByVal hDB As Long, retMajorVersion As Integer, retMinorVersion As Integer) As Integer
+Declare Function WIN_OSLockObject Lib LIB_W32 Alias "OSLockObject" ( ByVal handle As Long) As Long
+Declare Function WIN_OSLoadString Lib LIB_W32 Alias "OSLoadString" (ByVal handle As Long, ByVal S As Integer, ByVal B As String, ByVal nB As Integer) As Integer
+Declare Function WIN_OSPathNetConstruct Lib LIB_W32 Alias "OSPathNetConstruct" (ByVal NullPort As Long, ByVal Server As LMBCS String, ByVal File As LMBCS String, ByVal PathNet As LMBCS String) As Integer
+Declare Sub WIN_OSUnlockObject Lib LIB_W32 Alias "OSUnlockObject" (ByVal handle As Long)
+Declare Function WIN_OSMemFree Lib LIB_W32 Alias "OSMemFree" (ByVal handle As Long) As Integer
+Declare Function WIN_ConvertTIMEDATEToText Lib LIB_W32 Alias "ConvertTIMEDATEToText" (ByVal IntlFormat As Long,ByVal TextFormat As Long, actTIMEDATE As TIMEDATE, ByVal retTextBuffer As String,ByVal TextBufferLength As Integer,retTextLength As Integer) As Integer
+Declare Function W32_strlenLP Lib "kernel32" Alias "lstrlenA" (ByVal lpString As Long) As Long
+
+Declare Sub TUX_CopyMemory Lib "libc.so.6" Alias "memcpy" (hpvDest As Any, ByVal hpvSource As Long, ByVal cbCopy As Long)
+Declare Sub TUX_CopyMemoryString Lib "libc.so.6" Alias "memcpy" (ByVal hpvDest As LMBCS String, ByVal hpvSource As Long, ByVal cbCopy As Long)
+Declare Function TUX_NSFDbOpen Lib LIB_TUX Alias "NSFDbOpen" (ByVal dbPath As LMBCS String, dbHandle As Long ) As Integer
+Declare Function TUX_NSFDbClose Lib LIB_TUX Alias "NSFDbClose" (ByVal dbHandle As Long) As Integer
+Declare Function TUX_NSFDbGetUserActivity Lib LIB_TUX Alias "NSFDbGetUserActivity" ( ByVal hDB As Long, ByVal flags As Long, retDbActivity As DBActivity, rethUserInfo As Long, retUserCount As integer) As Integer
+Declare Function TUX_NSFDbGetUserActivityExtended Lib LIB_TUX Alias "NSFDbGetUserActivityExtended" ( ByVal hDB As Long, ByVal flags As Long, retDbActivity As DBActivityExtended, rethUserInfo As Long, retUserCount As integer) As Integer
+Declare Function TUX_NSFDbMajorMinorVersionGet Lib LIB_TUX Alias "NSFDbMajorMinorVersionGet"(ByVal hDB As Long, retMajorVersion As Integer, retMinorVersion As Integer) As Integer
+Declare Function TUX_OSLockObject Lib LIB_TUX Alias "OSLockObject" ( ByVal handle As Long) As Long
+Declare Function TUX_OSLoadString Lib LIB_TUX Alias "OSLoadString"  (ByVal null1 As Long, ByVal sError As Integer, ByVal errstr As String, ByVal lenstr As Integer) As integer
+Declare Function TUX_OSPathNetConstruct Lib LIB_TUX Alias "OSPathNetConstruct" (ByVal NullPort As Long, ByVal Server As String, ByVal File As String, ByVal PathNet As String) As Integer
+Declare Sub TUX_OSUnlockObject Lib LIB_TUX Alias "OSUnlockObject" ( ByVal handle As Long)
+Declare Sub TUX_OSMemFree Lib LIB_TUX Alias "OSMemFree" ( ByVal handle  As Long)
+Declare Function TUX_ConvertTIMEDATEToText Lib LIB_TUX Alias "ConvertTIMEDATEToText" (ByVal IntlFormat As Long,ByVal TextFormat As Long, actTIMEDATE As TIMEDATE, ByVal retTextBuffer As String, ByVal TextBufferLength As Integer,retTextLength As Integer) As Integer
+Declare Function TUX_strlenLP Lib LIB_TUX  Alias "Cstrlen" (ByVal lpString As Long) As Long
+
+Public Class NotesUserActivityEntry
+	Public UserName As String
+	Public Reads As Integer
+	Public Writes As Integer
+	Public Time As String
+End Class
+
+Public Class NotesUserActivity
+	Private hDb As Long
+	Private pDbActivity As DBACTIVITY
+	Private pDbActivityExtended As DBACTIVITYEXTENDED
+	Private rethUserInfo As Long
+	Private retUserCount As integer
+	Private dbVersionMajor As Integer
+	Private dbVersionMinor As Integer
+	Private flgHasActivity As Boolean
+	Private useExtended As Boolean
+	
+	Sub New (inputDbServer As String, inputDbPath As String)
+		Dim StatusResult As Integer
+		Dim DbOpened As Boolean
+		Dim NetPath As String
+		
+		' Error Handler
+		On Error GoTo Error_Handler
+		
+		Me.flgHasActivity = False
+		
+		NetPath = Space(MAXPATH)
+		
+		If isDefined("WINDOWS") Then
+			StatusResult = WIN_OSPathNetConstruct(0, inputDbServer, inputDbPath, NetPath)
+		Else
+			StatusResult = TUX_OSPathNetConstruct(0, inputDbServer, inputDbPath, NetPath)
+		End If
+		
+		If StatusResult <> STATUS_SUCCESS Then
+			' Couldn't build the database path
+			Call Output_Status_Error(StatusResult, "ClassUserActivity - NotesUserActivity Class (New)", "Call to OSPathNetConstruct failed", GetThreadInfo(LSI_THREAD_LINE)-3)
+			Exit Sub
+		End If
+		
+		' Open the target database
+		StatusResult = NSFDbOpen(NetPath, Me.hDb)
+		If StatusResult <> STATUS_SUCCESS Then
+			' Database failed to open
+			Call Output_Status_Error(StatusResult, "ClassUserActivity - NotesUserActivity Class (New)", "Call to NSFDbOpen failed", GetThreadInfo(LSI_THREAD_LINE)-3)
+			Exit Sub
+		End If
+		
+		' Get the ODS version of the database
+		If isDefined("WINDOWS") Then
+			StatusResult = WIN_NSFDbMajorMinorVersionGet(Me.hDb, Me.dbVersionMajor, Me.dbVersionMinor)
+		Else
+			StatusResult = TUX_NSFDbMajorMinorVersionGet(Me.hDb, Me.dbVersionMajor, Me.dbVersionMinor)
+		End If
+		
+		If Me.dbVersionMajor >= 48 Then
+			Me.useExtended = true
+		End If
+		
+		' Get the Summary User information
+		If Me.useExtended Then
+			StatusResult = NSFDbGetUserActivityExtended(Me.hDb, &h0, Me.pDbActivityExtended, Me.rethUserInfo, Me.retUserCount)
+			If StatusResult <> STATUS_SUCCESS Then
+				' Couldn't get handle to database user activity
+				If StatusResult = ERR_NOACCESS Then
+					' Not authorized to access ... add custom error handling / logging here
+					Print "Not authorized to access user activity for database"
+				Else
+					Call Output_Status_Error(StatusResult, "ClassUserActivity - NotesUserActivity Class (New)", "Call to NSFDbGetUserActivityExtended failed", GetThreadInfo(LSI_THREAD_LINE)-7)
+				End If
+				Exit Sub
+			End If
+		Else
+			StatusResult = NSFDbGetUserActivity(Me.hDb, &h0, Me.pDbActivity, Me.rethUserInfo, Me.retUserCount)
+			If StatusResult <> STATUS_SUCCESS Then
+				' Couldn't get handle to database user activity
+				If StatusResult = ERR_NOACCESS Then
+					' Not authorized to access ... add custom error handling / logging here
+					Print "Not authorized to access user activity for database"
+				Else
+					Call Output_Status_Error(StatusResult, "ClassUserActivity - NotesUserActivity Class (New)", "Call to NSFDbGetUserActivity failed", GetThreadInfo(LSI_THREAD_LINE)-7)
+				End If
+				Exit Sub
+			End If
+		End If
+		
+		If retUserCount > 0 Then
+			' User activity was found
+			Me.flgHasActivity = True
+		End If
+		
+		Exit Sub
+		
+Error_Handler:
+		Call Output_Error("ClassUserActivity Script Library - NotesUserActivity (New)", Erl, True)
+		Exit Sub
+	End Sub 
+	
+	Sub Delete
+		Dim StatusResult As Integer
+		
+		' Error Handler
+		On Error GoTo Error_Handler
+		
+		If Me.flgHasActivity Then
+			Call OSMemFree(rethUserInfo)
+		End If
+		
+		If hDb <> 0 Then
+			StatusResult = NSFDbClose(hDb)
+			hDb = 0
+			If StatusResult <> STATUS_SUCCESS Then
+				' Database failed to close properly
+				Call Output_Status_Error(StatusResult, "ClassUserActivity - NotesUserActivity Class (Delete)", "Call to NSFDbClose failed", GetThreadInfo(LSI_THREAD_LINE)-4)
+			End If
+		End If
+		
+		Exit Sub
+		
+Error_Handler:
+		Call Output_Error("ClassUserActivity Script Library - NotesUserActivity (Delete)", Erl, True)
+		Exit Sub
+	End Sub
+	
+	Public Function IsExtended As Boolean
+		IsExtended = Me.useExtended
+	End Function
+	
+	' Global Times
+	Public Function First As String
+		' Error Handler
+		On Error GoTo Error_Handler
+		
+		If me.useExtended Then
+			First = ConvertTIMEtoText(Me.pDbActivityExtended.First)
+		Else
+			First = ConvertTIMEtoText(Me.pDbActivity.First)			
+		End If
+		
+		Exit Function
+		
+Error_Handler:
+		Call Output_Error("ClassUserActivity Script Library - NotesUserActivity (First)", Erl, True)
+		Exit Function
+	End Function
+	
+	Public Function Last As String
+		' Error Handler
+		On Error GoTo Error_Handler
+
+		If me.useExtended Then
+			Last = ConvertTIMEtoText(Me.pDbActivityExtended.Last)
+		Else
+			Last = ConvertTIMEtoText(Me.pDbActivity.Last)
+		End If
+		Exit Function
+		
+Error_Handler:
+		Call Output_Error("ClassUserActivity Script Library - NotesUserActivity (Last)", Erl, True)
+		Exit Function
+	End Function
+	
+	' Total summary
+	Public Function Uses As Long
+		If me.useExtended Then
+			Uses = Me.pDbActivityExtended.Uses
+		Else
+			Uses = Me.pDbActivity.Uses
+		End If
+	End Function
+	
+	Public Function Reads As Long
+		If me.useExtended Then
+			Reads = Me.pDbActivityExtended.Reads
+		Else
+			Reads = Me.pDbActivity.Reads
+		End If
+	End Function
+	
+	Public Function Writes As Long
+		If me.useExtended Then
+			Writes = Me.pDbActivityExtended.Adds + Me.pDbActivityExtended.Updates + Me.pDbActivityExtended.Deletes
+		Else
+			Writes = Me.pDbActivity.Writes
+		End If
+	End Function
+	
+	Public Function Adds As Long
+		If me.useExtended Then
+			Adds = Me.pDbActivityExtended.Adds
+		Else
+			Adds = 0
+		End If
+	End Function
+	
+	Public Function Updates As Long
+		If me.useExtended Then
+			Updates = Me.pDbActivityExtended.Updates
+		Else
+			Updates = 0
+		End If
+	End Function
+	
+	Public Function Deletes As Long
+		If me.useExtended Then
+			Deletes = Me.pDbActivityExtended.Deletes
+		Else
+			Deletes = 0
+		End If
+	End Function
+	
+	' Day summary
+	Public Function PrevDayUses As Long
+		If me.useExtended Then
+			PrevDayUses = Me.pDbActivityExtended.PrevDayUses
+		Else
+			PrevDayUses = Me.pDbActivity.PrevDayUses
+		End If     
+	End Function
+	
+	Public Function PrevDayReads As Long
+		If me.useExtended Then
+			PrevDayReads = Me.pDbActivityExtended.PrevDayReads
+		Else
+			PrevDayReads = Me.pDbActivity.PrevDayReads
+		End If			
+	End Function
+	
+	Public Function PrevDayWrites As Long
+		If me.useExtended Then
+			PrevDayWrites = Me.pDbActivityExtended.PrevDayAdds + Me.pDbActivityExtended.PrevDayUpdates + Me.pDbActivityExtended.PrevDayDeletes
+		Else
+			PrevDayWrites = Me.pDbActivity.PrevDayWrites
+		End If
+	End Function
+	
+	Public Function PrevDayAdds As Long
+		If me.useExtended Then
+			PrevDayAdds = Me.pDbActivityExtended.PrevDayAdds
+		Else
+			PrevDayAdds = 0
+		End If
+	End Function
+	
+	Public Function PrevDayUpdates As Long
+		If me.useExtended Then
+			PrevDayUpdates = Me.pDbActivityExtended.PrevDayUpdates
+		Else
+			PrevDayUpdates = 0
+		End If
+	End Function
+	
+	Public Function PrevDayDeletes As Long
+		If me.useExtended Then
+			PrevDayDeletes = Me.pDbActivityExtended.PrevDayDeletes
+		Else
+			PrevDayDeletes = 0
+		End If
+	End Function
+	
+	' Week summary
+	Public Function PrevWeekUses As Long
+		If me.useExtended Then
+			PrevWeekUses = Me.pDbActivityExtended.PrevWeekUses
+		Else
+			PrevWeekUses = Me.pDbActivity.PrevWeekUses
+		End If
+	End Function
+	
+	Public Function PrevWeekReads As Long
+		If me.useExtended Then
+			PrevWeekReads = Me.pDbActivityExtended.PrevWeekReads
+		Else
+			PrevWeekReads = Me.pDbActivity.PrevWeekReads
+		End If
+	End Function
+	
+	Public Function PrevWeekWrites As Long
+		If me.useExtended Then
+			PrevWeekWrites = Me.pDbActivityExtended.PrevWeekAdds + Me.pDbActivityExtended.PrevWeekUpdates + Me.pDbActivityExtended.PrevWeekDeletes
+		Else
+			PrevWeekWrites = Me.pDbActivity.PrevWeekWrites
+		End If
+	End Function
+	
+	Public Function PrevWeekAdds As Long
+		If me.useExtended Then
+			PrevWeekAdds = Me.pDbActivityExtended.PrevWeekAdds
+		Else
+			PrevWeekAdds = 0
+		End If
+	End Function
+	
+	Public Function PrevWeekUpdates As Long
+		If me.useExtended Then
+			PrevWeekUpdates = Me.pDbActivityExtended.PrevWeekUpdates
+		Else
+			PrevWeekUpdates = 0
+		End If
+	End Function
+	
+	Public Function PrevWeekDeletes As Long
+		If me.useExtended Then
+			PrevWeekDeletes = Me.pDbActivityExtended.PrevWeekDeletes
+		Else
+			PrevWeekDeletes = 0
+		End If
+	End Function
+	
+	' Month summary
+	Public Function PrevMonthUses As Long
+		If me.useExtended Then
+			PrevMonthUses = Me.pDbActivityExtended.PrevMonthUses
+		Else
+			PrevMonthUses = Me.pDbActivity.PrevMonthUses
+		End If
+	End Function
+	
+	Public Function PrevMonthReads As Long
+		If me.useExtended Then
+			PrevMonthReads = Me.pDbActivityExtended.PrevMonthReads
+		Else
+			PrevMonthReads = Me.pDbActivity.PrevMonthReads
+		End If
+	End Function
+	
+	Public Function PrevMonthWrites As Long
+		If me.useExtended Then
+			PrevMonthWrites = Me.pDbActivityExtended.PrevMonthAdds + Me.pDbActivityExtended.PrevMonthUpdates + Me.pDbActivityExtended.PrevMonthDeletes
+		Else
+			PrevMonthWrites = Me.pDbActivity.PrevMonthWrites
+		End If
+	End Function
+	
+	Public Function PrevMonthAdds As Long
+		If me.useExtended Then
+			PrevMonthAdds = Me.pDbActivityExtended.PrevMonthAdds
+		Else
+			PrevMonthAdds = 0
+		End If
+	End Function
+	
+	Public Function PrevMonthUpdates As Long
+		If me.useExtended Then
+			PrevMonthUpdates = Me.pDbActivityExtended.PrevMonthUpdates
+		Else
+			PrevMonthUpdates = 0
+		End If
+	End Function
+	
+	Public Function PrevMonthDeletes As Long
+		If me.useExtended Then
+			PrevMonthDeletes = Me.pDbActivityExtended.PrevMonthDeletes
+		Else
+			PrevMonthDeletes = 0
+		End If
+	End Function
+	
+	Public Function UserActivityCount As Integer
+		UserActivityCount = Me.retUserCount
+	End Function
+	
+	Public Function HasUserActivity As Boolean
+		HasUserActivity = Me.flgHasActivity
+	End Function
+	
+	%REM
+		Created Sep 20, 2019 by Ulrich Krause/midpoints/de
+	%END REM
+	Public Function GetNthUserActivityEntry(inpEntry As integer) As NotesUserActivityEntry
+
+		On Error GoTo catch
+
+		Dim lEntry As integer
+		lEntry = inpEntry - 1
+
+		If Not Me.flgHasActivity Then Error 14104, "NotesUserActivity: No activity available"
+		If lEntry >= Me.retUserCount Or lEntry < 0 Then
+			Error 14103, "NotesUserActivity: Subscript out of range."
+		End If
+
+		Dim puActivity As Long
+		puActivity = OSLockObject(Me.rethUserInfo)
+		
+		Dim pActivityEntry As Long
+		Dim sDate As String
+		Dim nDate As Integer
+		Dim reads As Long
+		Dim writes As Long
+		Dim nameOffset As Long
+		Dim sName As String
+		Dim dt As TIMEDATE
+		
+		pActivityEntry = puActivity + lEntry * 16
+
+		CopyMemory dt.Innards(0), pActivityEntry , LEN_DWORD
+		CopyMemory dt.Innards(1), pActivityEntry + 4  , LEN_DWORD
+		CopyMemory reads, pActivityEntry + 8 , LEN_WORD
+		CopyMemory writes, pActivityEntry + 10 , LEN_WORD
+		CopyMemory nameOffset, pActivityEntry + 12 , LEN_DWORD
+		
+		Dim spUsername As String * MAXUSERNAME
+		spUsername = Space(MAXUSERNAME)
+		CopyMemoryString spUsername, puActivity + nameOffset, MAXUSERNAME - 2
+
+		Dim sUsername As String
+		sUserName = Trim(spUsername)
+		
+		Dim nuae As New NotesUserActivityEntry
+		With nuae
+			.UserName = sName
+			.Reads = reads
+			.Writes = writes
+			.Time = ConvertTIMEtoText(dt)
+		End With
+
+		Call OSUnlockObject(rethUserInfo)
+		puActivity = 0
+
+		Set GetNthUserActivityEntry = nuae
+
+		Exit Function
+catch:
+		Print "GetNthUserActivityEntry Error: " & Error & " Err: " & Err & " Erl: " & Erl
+		Resume eos
+eos:
+	End Function
+	
+	%REM
+		Created Sep 20, 2019 by Ulrich Krause/midpoints/de
+	%END REM	
+	Public Function GetNthUserActivityEntryExtended(inpEntry As Integer) As NotesUserActivityEntryExtended
+
+		On Error GoTo catch
+		
+		Dim lEntry As Integer
+		lEntry = inpEntry - 1
+		
+		If Not Me.flgHasActivity Then Error 14104, "NotesUserActivity: No activity available"
+		If lEntry >= Me.retUserCount Or lEntry < 0 Then
+			Error 14103, "NotesUserActivity: Subscript out of range."
+		End If
+
+		Dim puActivity As Long
+		puActivity = OSLockObject(Me.rethUserInfo)
+
+		Dim pActivityEntry As Long
+
+		Dim dt As TIMEDATE
+		Dim reads As Long
+		Dim adds As Long
+		Dim updates As Long
+		Dim deletes As Long
+		Dim nonDataReads As Long
+		Dim nonDataAdds As Long
+		Dim nonDataUpdates As Long
+		Dim nonDataDeletes As Long
+		Dim nameOffset As Long
+		Dim sName As String
+		
+		pActivityEntry = puActivity + lEntry * 28
+		
+		CopyMemory dt.Innards(0), pActivityEntry , LEN_DWORD
+		CopyMemory dt.Innards(1), pActivityEntry + 4 , LEN_DWORD
+		CopyMemory reads, pActivityEntry + 8 , LEN_WORD
+		CopyMemory adds, pActivityEntry + 10 , LEN_WORD
+		CopyMemory updates, pActivityEntry + 12 , LEN_WORD
+		CopyMemory deletes, pActivityEntry + 14 , LEN_WORD
+		CopyMemory nonDataReads, pActivityEntry + 16 , LEN_WORD
+		CopyMemory nonDataAdds, pActivityEntry + 18 , LEN_WORD
+		CopyMemory nonDataUpdates, pActivityEntry + 20 , LEN_WORD
+		CopyMemory nonDataDeletes, pActivityEntry + 22 , LEN_WORD
+		CopyMemory nameOffset, pActivityEntry + 24 , LEN_DWORD
+
+		Dim spUsername As String * MAXUSERNAME
+		spUsername = Space(MAXUSERNAME)
+
+		CopyMemoryString spUsername, puActivity + nameOffset, MAXUSERNAME - 2
+
+		Dim sUserName As String
+		sUserName = Trim(spUsername)
+
+		Dim nuae As New NotesUserActivityEntryExtended
+		With nuae
+			.UserName = sUserName
+			.Reads = Reads
+			.Adds = Adds
+			.Updates = Updates
+			.Deletes = Deletes
+			.NonDataReads = NonDataReads
+			.NonDataAdds = NonDataAdds
+			.NonDataUpdates = NonDataUpdates
+			.NonDataDeletes = NonDataDeletes
+			.Time  = ConvertTimeToText(dt)
+		End With
+
+		Call OSUnlockObject(rethUserInfo)
+		puActivity = 0
+
+		Set GetNthUserActivityEntryExtended = nuae
+		
+		Exit Function
+catch:
+		Print "GetNthUserActivityEntryExtended Error: " & Error & " Err: " & Err & " Erl: " & Erl
+		Resume eos
+eos:
+	End Function
+End Class
+
+Public Class NotesUserActivityEntryExtended
+	Public UserName As String
+	Public Reads As Integer
+	Public Adds As Integer
+	Public Updates As Integer
+	Public Deletes As Integer
+	Public NonDataReads As Integer
+	Public NonDataAdds As Integer
+	Public NonDataUpdates As Integer
+	Public NonDataDeletes As Integer
+	Public Time As String
+End Class
+
+Sub Initialize
+	Set Session = New NotesSession
+	Set CurrDb = Session.CurrentDatabase
+End Sub
+
+Sub Terminate
+	
+End Sub
+
+Sub Sort_Array (in_array As Variant)
+	' Error Handler
+	On Error GoTo Error_Handler
+	
+	'returns a sorted array based on a complexity of O(n^2) using a bubble sort     
+	If Not IsArray(in_array) Then
+		'Print "Sort List: value received is not an array"
+		Exit Sub
+	End If
+	
+	Dim top, bot, cur, cur2 As Integer
+	top=UBound (in_array)
+	bot=LBound (in_array)
+	
+	If top=bot Then
+		'Print "Sort List:: value received contains only one value"
+		Exit Sub
+	End If
+	
+	Dim tmp_element As Variant
+	
+	For cur=bot To top
+		cur2=cur
+		Do While cur2 > bot     'bubble up
+			If (in_array(cur2) > in_array(cur2-1)) Then
+				Exit Do
+			Else
+				'swap
+				tmp_element=in_array(cur2)
+				in_array(cur2)=in_array(cur2-1)
+				in_array(cur2-1)=tmp_element
+			End If               
+			cur2=cur2-1
+		Loop
+	Next
+	
+	Exit Sub
+	
+Error_Handler:
+	' An error has occurred.
+	Call Output_Error("ClassUserActivity Script Library - Sort_Array", Erl, True)
+	Exit Sub
+End Sub
+
+Function NSFDbGetUserActivity( ByVal hDB As Long, ByVal flags As Long, retDbActivity As DBActivity, rethUserInfo As Long, retUserCount As integer) As Integer
+	If isDefined("WINDOWS") Then
+		NSFDbGetUserActivity = WIN_NSFDbGetUserActivity(hDB, flags, retDbActivity, rethUserInfo, retUserCount)
+	Else
+		NSFDbGetUserActivity = TUX_NSFDbGetUserActivity(hDB, flags, retDbActivity, rethUserInfo, retUserCount)
+	End If
+End Function
+	
+Private Function ConvertTIMEtoText(TIMESTRUCT As TIMEDATE) As String
+	Dim spTime As String * 80
+	Dim retLength As Integer
+
+	spTime = Space(80)
+	
+	If isDefined("WINDOWS") Then
+		Call WIN_ConvertTIMEDATEToText (&h0,&h0, TIMESTRUCT, spTime,MAXALPHATIMEDATE,retLength)
+	Else
+		Call TUX_ConvertTIMEDATEToText (&h0,&h0, TIMESTRUCT, spTime,MAXALPHATIMEDATE,retLength)
+	End If
+	
+	ConvertTIMEtoText = Left(spTime,retLength)
+End Function
+
+Sub OSMemFree ( handle  As Long)
+	If IsDefined("WINDOWS") Then
+		WIN_OSMemFree  handle
+	Else
+		TUX_OSMemFree  handle
+	End If
+End Sub
+
+Function CreateActivityLogDocs(db As NotesDatabase, ua As NotesUserActivity) As Boolean
+	' Create the activity log documents for each entry
+	Dim ActivityLogsExtendedView As NotesView
+	Dim DocCollection As NotesDocumentCollection
+	Dim ActivityLogDoc As NotesDocument
+	Dim ServerName As NotesName
+	Dim uae As NotesUserActivityEntry
+	Dim uaeExtended As NotesUserActivityEntryExtended
+	Dim DateTimeValue As NotesDateTime
+	Dim iCounter As Integer
+	Dim IsExtended As Boolean
+	
+	' Error Handler
+	On Error GoTo Error_Handler
+	
+	' Remove all existing log entries
+	If ActivityLogsView Is Nothing Then
+		Set ActivityLogsView = CurrDb.GetView("(ActivityLogs)")
+	End If
+	
+	If Not ActivityLogsView Is Nothing Then
+		Call ActivityLogsView.Refresh
+		Set ServerName = New NotesName(db.Server)
+		Set DocCollection = ActivityLogsView.GetAllDocumentsByKey(ServerName.Abbreviated & "~" & db.ReplicaID, True)
+		If DocCollection.Count > 0 Then
+			Call DocCollection.RemoveAll(True)
+		End If
+	End If
+
+	If ua.IsExtended Then
+		IsExtended = True
+	End If
+	
+	For iCounter = 1 To ua.UserActivityCount
+		If IsExtended Then
+			Set uaeExtended = ua.GetNthUserActivityEntryExtended(iCounter)
+			If Not uaeExtended Is Nothing Then
+				Set ActivityLogDoc = New NotesDocument(CurrDb)
+				ActivityLogDoc.Form = "ActivityLog"
+				ActivityLogDoc.DbServer = db.Server
+				ActivityLogDoc.DbReplicaID = db.ReplicaID
+				ActivityLogDoc.DbPath = db.FilePath
+				ActivityLogDoc.DbTitle = db.Title
+				ActivityLogDoc.DateTime = uaeExtended.Time
+				
+				If Trim(uaeExtended.Time) <> "" Then
+					' Convert the Time string value to a proper date / time value
+					If IsDate(uaeExtended.Time) Then
+						Set DateTimeValue = New NotesDateTime(uaeExtended.Time)
+						Call ActivityLogDoc.ReplaceItemValue("DateTime", DateTimeValue)
+					End If
+				End If
+				
+				ActivityLogDoc.Reads = GetLongValue(uaeExtended.Reads)
+				ActivityLogDoc.Adds = GetLongValue(uaeExtended.Adds)
+				ActivityLogDoc.Updates = GetLongValue(uaeExtended.Updates)
+				ActivityLogDoc.Deletes = GetLongValue(uaeExtended.Deletes)
+				ActivityLogDoc.Writes = ActivityLogDoc.Adds(0) + ActivityLogDoc.Updates(0) + ActivityLogDoc.Deletes(0)
+				ActivityLogDoc.NonDataReads = GetLongValue(uaeExtended.NonDataReads)
+				ActivityLogDoc.NonDataAdds = GetLongValue(uaeExtended.NonDataAdds)
+				ActivityLogDoc.NonDataUpdates = GetLongValue(uaeExtended.NonDataUpdates)
+				ActivityLogDoc.NonDataDeletes = GetLongValue(uaeExtended.NonDataDeletes)
+				ActivityLogDoc.UserName = uaeExtended.UserName
+				Call ActivityLogDoc.Save(True, True)
+				
+				' Free up the memory occupied by the NotesUserActivity object
+				Delete uaeExtended
+			End If
+		Else
+			Set uae = ua.GetNthUserActivityEntry(iCounter)
+			If Not uae Is Nothing Then
+				Set ActivityLogDoc = New NotesDocument(CurrDb)
+				ActivityLogDoc.Form = "ActivityLog"
+				ActivityLogDoc.DbServer = db.Server
+				ActivityLogDoc.DbReplicaID = db.ReplicaID
+				ActivityLogDoc.DbPath = db.FilePath
+				ActivityLogDoc.DbTitle = db.Title
+				ActivityLogDoc.DateTime = uae.Time
+				
+				If Trim(uae.Time) <> "" Then
+					' Convert the Time string value to a proper date / time value
+					If IsDate(uae.Time) Then
+						Set DateTimeValue = New NotesDateTime(uae.Time)
+						Call ActivityLogDoc.ReplaceItemValue("DateTime", DateTimeValue)
+					End If
+				End If
+
+				ActivityLogDoc.Reads = GetLongValue(uae.Reads)
+				ActivityLogDoc.Writes = GetLongValue(uae.Writes)
+				ActivityLogDoc.UserName = uae.UserName
+				Call ActivityLogDoc.Save(True, True)
+			End If
+			
+			'If iCounter Mod 10 = 0 Then
+			'	' Update status bar every 10 records
+			'	If Not Session.IsOnServer Then
+			'		Print "(" + CStr(iCounter) + ") " + uae.Time + " " + uae.UserName + " " + "Reads:" + CStr(uae.Reads) + " Writes:" + CStr(uae.Writes)
+			'	End If
+			'End If
+			
+			' Free up the memory occupied by the NotesUserActivity object
+			Delete uae
+		End If
+
+		'If iCounter Mod 10 = 0 Then
+		'	' Update status bar every 10 records
+		'	If Not Session.IsOnServer Then
+		'		Print "(" + CStr(iCounter) + ") " + uae.Time + " " + uae.UserName + " " + "Reads:" + CStr(uae.Reads) + " Writes:" + CStr(uae.Writes)
+		'	End If
+		'End If
+
+	Next iCounter
+	
+	' Refresh views
+	If Not ActivityLogsView Is Nothing Then
+		Call ActivityLogsView.Refresh
+	End If
+	
+	Set ActivityLogsExtendedView = CurrDb.GetView("(ActivityLogsExtended)")
+	If Not ActivityLogsExtendedView Is Nothing Then
+		Call ActivityLogsExtendedView.Refresh
+	End If
+		
+	Exit Function
+	
+Error_Handler:
+	Call Output_Error("ClassUserActivity Script Library - CreateActivityLogDocs", Erl, True)
+	Exit Function
+End Function
+
+Function NSFDbOpen( db As String, hDB As Long) As Integer
+	If isDefined("WINDOWS") Then
+		NSFDbOpen = WIN_NSFDbOpen(db,hDb)
+	Else
+		NSFDbOpen = TUX_NSFDbOpen(db,hDb)
+	End If
+End Function
+
+Function MaskedErrorStatus(StatusError As Integer) As Integer
+	' Error Handler
+	On Error GoTo Error_Handler
+	
+	MaskedErrorStatus = StatusError And &H3FFF
+	Exit Function
+	
+Error_Handler:
+	Call Output_Error("ClassUserActivity Script Library - MaskedErrorStatus", Erl, True)
+	Exit Function
+End Function
+
+Function NSFDBClose (hDb As Long)
+	If isDefined("WINDOWS") Then
+		NSFDbClose = Win_NSFDbClose(hDb)
+	Else
+		NSFDbClose = TUX_NSFDbClose(hDb)
+	End If
+End Function
+
+Sub CopyMemory( hpvDest As Long, hpvSource As Long, cbCopy As Long)
+	If IsDefined("WINDOWS") Then
+		Call W32_CopyMemory( hpvDest, hpvSource, cbCopy )	
+	Else
+		Call TUX_CopyMemory( hpvDest, hpvSource, cbCopy )
+	End if
+End Sub
+
+Sub CopyMemoryString(hpvDest As String, hpvSource As Long, cbCopy As Long)
+	If IsDefined("WINDOWS") Then	
+		Call W32_CopyMemoryString(hpvDest, hpvSource, cbCopy)		
+	Else
+		Call TUX_CopyMemoryString (hpvDest, hpvSource, cbCopy)
+	End If  
+End Sub
+
+Function Output_Error(FunctionName As String, ErrorLine As Integer, ContinueOnError As Integer)
+	' Output the error that has occurred
+	Dim ErrorString As String
+	Dim ErrorSession As New NotesSession
+	Dim IgnoreError As Boolean
+	Dim NewLine As String
+	
+	' Exit function if ErrorLine is 0
+	If ErrorLine = 0 Then
+		' Not a valid error
+		ErrorDescription = ""
+		Exit Function
+	End If
+	
+	' Error handler
+	On Error Resume Next
+	
+	If Trim(ErrorDescription) = "" Then
+		ErrorDescription = Error$
+	ElseIf Len(ErrorDescription) > 20000 Then
+		ErrorDescription = Left(ErrorDescription, 1000) & "...<truncated>..." & Right(ErrorDescription, 1000)
+	End If
+	
+	' Check for errors to ignore
+	If InStr(1, LCase(ErrorDescription), "stopped at your request") > 0 Then
+		IgnoreError = True
+	ElseIf InStr(1, LCase(ErrorDescription), "server not responding") > 0 Then
+		IgnoreError = True
+	ElseIf InStr(1, LCase(ErrorDescription), "server is not responding") > 0 Then
+		IgnoreError = True
+	End If
+	
+	If IgnoreError Then
+		ErrorDescription = ""
+		Exit Function
+	End If	
+	
+	Call Output_ErrorLog(FunctionName, ErrorLine)
+	
+	' Format the error for printing and outputting to the error log
+	If ErrorSession.IsOnServer Then
+		' Format the error for output to server
+		NewLine = ", "
+		ErrorString = "The following error has occurred: "
+		ErrorString = ErrorString & "Function - " & FunctionName & NewLine
+		ErrorString = ErrorString & "Line - " & Trim(CStr(ErrorLine)) & NewLine
+		ErrorString = ErrorString & "Error - " & Trim(CStr(Err)) & NewLine
+		ErrorString = ErrorString & "Details - " & Error$
+		
+		Print ErrorString
+		
+		ErrorDescription = ""	
+		
+		If ContinueOnError Then
+			' ContinueOnError is true.  Return execution to the calling function
+			Exit Function
+		Else
+			' ContinueOnError is false.  Abort execution
+			End
+		End If
+	Else
+		' This is being called from an agent being manually run.
+		' Error details will be displayed in a message box
+		NewLine = Chr(13)
+		ErrorString = "The following error has occurred:" & NewLine
+		ErrorString = ErrorString & "Function - " & FunctionName & NewLine
+		ErrorString = ErrorString & "Line - " & Trim(CStr(ErrorLine)) & NewLine
+		ErrorString = ErrorString & "Error - " & Trim(CStr(Err)) & NewLine
+		ErrorString = ErrorString & "Details - " & Error$ & NewLine & NewLine
+		ErrorString = ErrorString & "Would you like to continue processing?"
+		
+		If MessageBox(ErrorString, MB_YESNO + MB_ICONSTOP, "Processing Error") = IDNO Then
+			' The no button was clicked
+			End
+		End If
+	End If
+	
+End Function
+
+Function OSLockObject (handle As Long) As Long
+	If IsDefined("WINDOWS") Then
+		OSLockObject = WIN_OSLockObject (handle)
+	Else
+		OSLockObject = TUX_OSLockObject (handle)
+	End If
+End Function
+
+Function NSFDbGetUserActivityExtended( ByVal hDB As Long, ByVal flags As Long, retDbActivity As DBActivityExtended, rethUserInfo As Long, retUserCount As integer) As Integer
+	If isDefined("WINDOWS") Then
+		NSFDbGetUserActivityExtended = WIN_NSFDbGetUserActivityExtended(hDB, flags, retDbActivity, rethUserInfo, retUserCount)
+	Else
+		NSFDbGetUserActivityExtended = TUX_NSFDbGetUserActivityExtended(hDB, flags, retDbActivity, rethUserInfo, retUserCount)
+	End If
+End Function
+Function GetLongValue(inValue As Integer) As Long
+	
+	' Error Handler
+	On Error GoTo Error_Handler
+	
+	If InValue < 0 Then
+		' Convert negative integer to positive long (by adding 2^16)
+		GetLongValue = CLng(inValue + 65536)
+	Else
+		GetLongValue = CLng(inValue)
+	End If
+	
+	Exit Function
+	
+Error_Handler:
+	Call Output_Error("ClassUserActivity Script Library - GetLongValue", Erl, True)
+	Exit Function
+End Function
+
+Function Output_Status_Error(StatusError As Integer, FunctionName As Variant, Description As String, LineNumber As Variant) As Boolean
+	Dim MaskedStatusError As Integer
+	
+	' Error Handler
+	On Error GoTo Error_Handler
+	
+	If StatusError = 0 Then
+		' This is a null status code
+		Exit Function
+	End If
+	
+	MaskedStatusError = MaskedErrorStatus(StatusError)
+	If MaskedStatusError = 0 Then
+		' This is a null error code
+		Exit Function
+	End If
+	
+	' Errors that we will ignore
+	If MaskedStatusError = ERR_NO_MODIFIED_NOTES Then
+		Exit Function
+	ElseIf MaskedStatusError = ERR_SPECIAL_ID Then
+		Exit Function
+	ElseIf MaskedStatusError = ERR_NOT_FOUND Then
+		Exit Function
+	End If
+	
+	Call Output_API_Error(CStr(FunctionName), Description, CInt(LineNumber), MaskedStatusError)
+	
+	Output_Status_Error = True
+	Exit Function
+	
+Error_Handler:
+	Call Output_Error("ClassUserActivity Script Library - Output_Status_Error", Erl, True)
+	Exit Function
+End Function
+
+Sub OSUnlockObject (handle As Long)
+	If isDefined("WINDOWS") Then
+		Call WIN_OSUnLockObject(handle)
+	Else
+		Call TUX_OSUnLockObject(handle)
+	End If
+End Sub
+
+Function CreateDbUserActivityDoc(Db As NotesDatabase, ua As NotesUserActivity) As NotesDocument
+	' Create the user activity summary document for the database
+	Dim ActivityDoc As NotesDocument
+	Dim ServerName As NotesName
+	Dim DateTimeValue As NotesDateTime
+	
+	' Error Handler
+	On Error GoTo Error_Handler
+	
+	Set ServerName = New NotesName(Db.Server)
+	
+	' Open the activity summaries view
+	If ActivitySummaryView Is Nothing Then
+		Set ActivitySummaryView = CurrDb.GetView("(ActivitySummaries)")
+	End If
+
+	' Check for an existing database user activity document	
+	If Not ActivitySummaryView Is Nothing Then
+		Call ActivitySummaryView.Refresh
+		Set ActivityDoc = ActivitySummaryView.GetDocumentByKey(ServerName.Abbreviated & "~" & Db.ReplicaID, True)
+	End If
+	
+	If ActivityDoc Is Nothing Then
+		' Existing document not found. Create a new summary document
+		Set ActivityDoc = New NotesDocument(CurrDb)
+		ActivityDoc.Form = "DbUserActivity"
+	End If
+	
+	If ua.IsExtended Then
+		ActivityDoc.IsExtended = "Y"
+	Else
+		ActivityDoc.IsExtended = "N"
+	End If
+	
+	ActivityDoc.DbServer = Db.Server
+	ActivityDoc.DbTitle = Db.Title
+	ActivityDoc.DbPath = Db.FilePath
+	ActivityDoc.DbReplicaID = Db.ReplicaID
+
+	' Previous Day Activity
+	ActivityDoc.R1C1 = ua.PrevDayUses
+	ActivityDoc.R1C2 = ua.PrevDayReads
+	ActivityDoc.R1C3 = ua.PrevDayWrites
+	If ua.IsExtended Then
+		ActivityDoc.R1C4 = ua.PrevDayAdds
+		ActivityDoc.R1C5 = ua.PrevDayUpdates
+		ActivityDoc.R1C6 = ua.PrevDayDeletes
+	End If
+	
+	' Previous Week Activity
+	ActivityDoc.R2C1 = ua.PrevWeekUses
+	ActivityDoc.R2C2 = ua.PrevWeekReads
+	ActivityDoc.R2C3 = ua.PrevWeekWrites
+	If ua.IsExtended Then
+		ActivityDoc.R2C4 = ua.PrevWeekAdds
+		ActivityDoc.R2C5 = ua.PrevWeekUpdates
+		ActivityDoc.R2C6 = ua.PrevWeekDeletes
+	End If
+		
+	' Previous Month Activity
+	ActivityDoc.R3C1 = ua.PrevMonthUses
+	ActivityDoc.R3C2 = ua.PrevMonthReads
+	ActivityDoc.R3C3 = ua.PrevMonthWrites
+	If ua.IsExtended Then
+		ActivityDoc.R3C4 = ua.PrevMonthAdds
+		ActivityDoc.R3C5 = ua.PrevMonthUpdates
+		ActivityDoc.R3C6 = ua.PrevMonthDeletes
+	End If
+		
+	' Summary Information
+	ActivityDoc.Uses = ua.Uses
+	ActivityDoc.Reads = ua.Reads
+	ActivityDoc.Writes = ua.Writes
+	If ua.IsExtended Then
+		ActivityDoc.Adds = ua.Adds
+		ActivityDoc.Updates = ua.Updates
+		ActivityDoc.Deletes = ua.Deletes
+	End If
+	
+	ActivityDoc.NoEntries = ua.UserActivityCount
+	
+	ActivityDoc.FirstEntry = ua.First	
+	If Trim(ua.First) <> "" Then
+		' Convert First string value to a date / time value
+		If IsDate(ua.First) Then
+			Set DateTimeValue = New NotesDateTime(ua.First)
+			Call ActivityDoc.ReplaceItemValue("FirstEntry", DateTimeValue)
+		End If
+	End If
+	
+	ActivityDoc.LastEntry = ua.Last
+	If Trim(ua.Last) <> "" Then
+		' Convert Last string value to a date / time value
+		If IsDate(ua.Last) Then
+			Set DateTimeValue = New NotesDateTime(ua.Last)
+			Call ActivityDoc.ReplaceItemValue("LastEntry", DateTimeValue)
+		End If
+	End If
+	
+	Call ActivityDoc.Save(True, True)
+	
+	'Print "First: " + ua.First
+	'Print "Last: " + ua.Last
+	'Print "Uses: " + Cstr(ua.Uses)
+	'Print "Uses Day: " + Cstr(ua.PrevDayUses)
+	'Print "Uses Week: " + Cstr(ua.PrevWeekUses)
+	'Print "Uses Month: " + Cstr(ua.PrevMonthUses)
+
+	Set CreateDbUserActivityDoc = ActivityDoc
+	Exit Function
+
+Error_Handler:
+	Call Output_Error("ClassUserActivity Script Library - CreateDbUserActivityDoc", Erl, True)
+	Exit Function
+End Function
+
+Sub Output_API_Error(FunctionName As String, Description As String, ErrorLine As Integer, APIErrorCode As Integer)
+	' Output the the description for the passed API error code
+	Dim ThisSession As New NotesSession
+	Dim ErrorDescr As String
+	Dim ErrorString As String
+	Dim NewLine As String
+	
+	If APIErrorCode = 0 Then
+		' Invalid error code
+		Exit Sub
+	End If
+	
+	If ThisSession.Platform = "Windows/32" Then
+		ErrorDescr = String$(1024, " ")
+		Call WIN_OSLoadString(0, APIErrorCode And &H3FFF, ErrorDescr, 1024)
+		If InStr(1, ErrorDescr, Chr$(0)) > 0 Then
+			ErrorDescr = StrLeft(ErrorDescr, Chr$(0))
+		End If
+		If Trim(ErrorDescr) = "" Or ErrorDescr = "No error" Then
+			ErrorDescr = "Unknown error (&H" & Hex$(CInt(APIErrorCode)) & ")"
+		End If
+	Else
+		ErrorDescr = "Unknown error (&H" & Hex$(CInt(APIErrorCode)) & ")"
+	End If
+	
+	If Trim(Description) <> "" Then
+		ErrorDescr = Description & ": " & ErrorDescr
+	End If
+	
+	ErrorDescription = ErrorDescr
+	Call Output_ErrorLog(FunctionName, ErrorLine)
+	
+	If ThisSession.IsOnServer Then
+		' Session is running on server (scheduled / background agent). Print the error then continue processing
+		' Format the error for printing
+		NewLine = ", "
+		ErrorString = "The following API error has occurred: "
+		ErrorString = ErrorString & "Function - " & FunctionName & NewLine
+		ErrorString = ErrorString & "Line - " & Trim(CStr(ErrorLine)) & NewLine
+		ErrorString = ErrorString & "Error - " & Trim(CStr(APIErrorCode)) & NewLine
+		ErrorString = ErrorString & "Details - " & ErrorDescr
+		Print ErrorString
+	Else
+		NewLine = Chr(13)
+		ErrorString = "The following API error has occurred:" & NewLine
+		ErrorString = ErrorString & "Function - " & FunctionName & NewLine
+		ErrorString = ErrorString & "Line - " & Trim(CStr(ErrorLine)) & NewLine
+		ErrorString = ErrorString & "Error - " & Trim(CStr(APIErrorCode)) & NewLine
+		ErrorString = ErrorString & "Details - " & ErrorDescr & NewLine & NewLine
+		ErrorString = ErrorString & "Would you like to continue processing?"
+		
+		If MessageBox(ErrorString, MB_YESNO + MB_ICONSTOP, "Processing Error") = IDNO Then
+			' The no button was clicked
+			End
+		End If
+	End If
+End Sub
+
+Function Output_ErrorLog(FunctionName As String, ErrorLine As Integer) As NotesDocument
+	' Create an error log document for the passed error
+	Dim ThisSession As New NotesSession
+	Dim ThisDb As NotesDatabase
+	Dim ErrorLogDoc As NotesDocument
+	Dim DatabaseLinkItem As NotesRichTextItem
+	Dim DocumentLinkItem As NotesRichTextItem
+	Dim DocTitle As String
+	Dim ErrorString As String
+	Dim IgnoreError As Boolean
+	Dim PlatformSpecific As String
+	Dim TempVar As Variant
+	
+	' Error handler
+	On Error Resume Next
+	
+	' Exit function if ErrorLine is 0
+	If ErrorLine = 0 Then
+		' Not a valid error
+		Exit Function
+	End If
+
+	' Check for errors to ignore
+	If ErrorDescription = "" Then
+		ErrorString = LCase(Error$)
+	Else
+		ErrorString = LCase(ErrorDescription)
+	End If
+
+	If InStr(1, ErrorString, "stopped at your request") > 0 Then
+		IgnoreError = True
+	ElseIf InStr(1, ErrorString, "server not responding") > 0 Then
+		IgnoreError = True
+	ElseIf InStr(1, ErrorString, "server is not responding") > 0 Then
+		IgnoreError = True
+	End If
+	
+	If IgnoreError Then
+		Exit Function
+	End If
+
+	Set ThisDb = ThisSession.CurrentDatabase
+	
+	' Create a new error log document for this error
+	Set ErrorLogDoc = New NotesDocument(ThisDb)
+	ErrorLogDoc.Form = "ErrorLog"
+	ErrorLogDoc.CreatedAt = Now
+	
+	If InStr(1, FunctionName, "-") = 0 Then
+		ErrorLogDoc.DesignElement = Trim(FunctionName)
+		ErrorLogDoc.Function = Trim(FunctionName)
+	Else
+		ErrorLogDoc.DesignElement = Trim(StrLeftBack(FunctionName, "-"))
+		ErrorLogDoc.Function = Trim(StrRightBack(FunctionName, "-"))
+	End If
+	
+	ErrorLogDoc.LineNumber = ErrorLine
+	ErrorLogDoc.ErrorNumber = Err
+	
+	If ErrorDescription = "" Then
+		ErrorLogDoc.Error = Error$
+	Else
+		If Len(ErrorDescription) > 20000 Then
+			ErrorDescription = Left(ErrorDescription, 1000) & "...<truncated>..." & Right(ErrorDescription, 1000)
+		End If
+		ErrorLogDoc.Error = ErrorDescription
+	End If
+	
+	ErrorLogDoc.UserName = ThisSession.UserName
+	ErrorLogDoc.NotesVersion = ThisSession.NotesVersion
+	
+	TempVar = Evaluate(|@Platform([SPECIFIC])|)
+	If IsArray(TempVar) Then
+		PlatformSpecific = Join(TempVar, ";")
+	End If
+	
+	If Trim(PlatformSpecific) = "" Then
+		ErrorLogDoc.Platform = ThisSession.Platform
+	Else
+		ErrorLogDoc.Platform = ThisSession.Platform & " (" & PlatformSpecific & ")"
+	End If
+	
+	If ThisDb.Server = "" Then
+		ErrorLogDoc.SourceServer = LOCAL_SERVER
+	Else
+		ErrorLogDoc.SourceServer = ThisDb.Server
+	End If
+	ErrorLogDoc.SourceDb = ThisDb.Title & " (" & LCase(ThisDb.FilePath) & ")"
+	ErrorLogDoc.SourceDbPath = LCase(ThisDb.FilePath)
+	
+	Call ErrorLogDoc.Save(True, True)
+	
+	' Return the error log document
+	Set Output_ErrorLog = ErrorLogDoc
+	
+End Function
+
+Function GetAPIError (errorCode As Integer) As String
+	'** this function translates Notes API error codes into their
+	'** corresponding error strings
+	Dim errorString As String*256
+	Dim returnErrorString As String
+	Dim resultStringLength As Long
+	Dim errorCodeTranslated As Integer
+	
+	'** mask off the top 2 bits of the errorCode that was returned; this is
+	'** what the ERR macro in the API does
+	errorCodeTranslated = (errorCode And ERR_MASK)
+	
+	'** get the error code translation using the OSLoadString API function
+	If isDefined("WINDOWS") Then
+		resultStringLength = WIN_OSLoadString(0, errorCode, errorString, 255)
+	Else
+		resultStringLength = TUX_OSLoadString(0,errorCode, errorString, 255)	
+		End If
+	
+	'** strip off the null-termination on the string before you return it
+	If (InStr(errorString, Chr(0)) > 0) Then
+		returnErrorString = Left$(errorString, InStr(errorString, Chr(0)) - 1)
+	Else
+		returnErrorString = errorString
+	End If
+	
+	GetAPIError = returnErrorString
+	
+End Function
+
+%REM
+	Function strLen
+	Description: Comments for Function
+%END REM
+Function strLen(l As Long) As long
+	If isDefined("WINDOWS") Then
+		strLen = W32_strlenLP(l)
+	Else
+		strLen = TUX_strlenLP(l)
+	End If
+End Function
+
+Function GetBufferAsString (buffer As Long, bufferLen As Integer, offset As Long) As String
+	Dim pointer As Long
+	Dim bufferText As String
+	
+	bufferText = Space(bufferLen)
+	pointer = OSLockObject(buffer)
+	Call TUX_CopyMemoryString(pointer + offset, bufferText, CLng(bufferLen))
+	Call OSUnlockObject(buffer)
+	
+	GetBufferAsString = bufferText
+End Function
